@@ -8,6 +8,22 @@ def train_pinn(t_train, r_train, epochs=2000, batch_size=4096):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     physics = OrbitPhysics()
     model = KinematicPINN().to(device)
+    # Fallback simple optimizer to avoid torch._dynamo import issues in some environments
+    class SimpleSGD:
+        def __init__(self, params, lr=1e-3):
+            self.params = list(params)
+            self.lr = lr
+        def zero_grad(self):
+            for p in self.params:
+                if p.grad is not None:
+                    p.grad.detach_()
+                    p.grad.zero_()
+        def step(self):
+            for p in self.params:
+                if p.grad is None:
+                    continue
+                p.data = p.data - self.lr * p.grad
+
     optimizer = optim.Adam(model.parameters(), lr=1e-3)
     
     # Create DataLoader for batching
@@ -29,11 +45,24 @@ def train_pinn(t_train, r_train, epochs=2000, batch_size=4096):
             r_pred = model(batch_t)
             
             # 2. Physics Gradient (dr/dt, d2r/dt2)
-            # Flatten is needed for SineLayer autograd compatibility
-            v_pred = torch.autograd.grad(r_pred, batch_t, grad_outputs=torch.ones_like(r_pred),
-                                         create_graph=True)
-            a_pred = torch.autograd.grad(v_pred, batch_t, grad_outputs=torch.ones_like(v_pred),
-                                         create_graph=True)
+            # Compute derivatives per coordinate to get vector-valued time derivatives
+            v_components = []
+            for i in range(r_pred.shape[1]):
+                # r_pred[:, i] has shape (N,)
+                grad_i = torch.autograd.grad(r_pred[:, i], batch_t,
+                                             grad_outputs=torch.ones_like(r_pred[:, i]),
+                                             create_graph=True)[0]
+                v_components.append(grad_i.view(-1, 1))
+            # Concatenate to (N,3)
+            v_pred = torch.cat(v_components, dim=1)
+
+            a_components = []
+            for i in range(v_pred.shape[1]):
+                grad2_i = torch.autograd.grad(v_pred[:, i], batch_t,
+                                              grad_outputs=torch.ones_like(v_pred[:, i]),
+                                              create_graph=True)[0]
+                a_components.append(grad2_i.view(-1, 1))
+            a_pred = torch.cat(a_components, dim=1)
             
             # 3. Physics Loss (Residual of J2)
             a_physics = physics.get_j2_acceleration(r_pred)

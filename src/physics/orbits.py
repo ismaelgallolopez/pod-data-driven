@@ -1,4 +1,5 @@
 import torch
+import math
 
 class OrbitPhysics:
     def __init__(self):
@@ -9,7 +10,7 @@ class OrbitPhysics:
 
         # Non-dimensionalization factors (for better NN convergence)
         self.L_star = self.R_earth       # Distance unit: 1 Earth Radius
-        self.T_star = torch.sqrt(self.L_star**3 / self.mu) # Time unit: ~806.8 seconds
+        self.T_star = math.sqrt(self.L_star**3 / self.mu) # Time unit: ~806.8 seconds
         
     def get_j2_acceleration(self, r_vec):
         """

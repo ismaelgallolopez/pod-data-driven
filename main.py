@@ -1,4 +1,5 @@
 import torch
+import warnings
 from torch.utils.data import DataLoader, TensorDataset
 from src.training.train_pinn import train_pinn
 import os
@@ -10,7 +11,15 @@ def main():
         print("Data not found. Run: python src/utils/sp3_parser.py first.")
         return
 
-    data = torch.load(data_path)
+    # Try using weights_only to avoid FutureWarning in newer torch versions;
+    # fall back for older torch that doesn't support the kwarg.
+    try:
+        data = torch.load(data_path, weights_only=True)
+    except TypeError:
+        # Suppress the FutureWarning about weights_only for backwards compatibility
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message=".*torch.load.*weights_only.*", category=FutureWarning)
+            data = torch.load(data_path)
     
     # data format: [t, x, y, z]
     t = data[:, 0]
@@ -23,12 +32,11 @@ def main():
     t_train, r_train = t[:train_idx], r[:train_idx]
     t_test, r_test = t[train_idx:], r[train_idx:]
 
-    print(f"Total Samples: {num_samples}")
-    print(f"Training on: {len(t_train)} points (~{24} days)")
-    
-    # 3. Initialize and Train the PINN (Stage 1: Kinematic Smoothing)
-    # Note: We pass the training data to our trainer
-    print("\n>>> Starting Stage 1: PINN Kinematic Smoothing...")
+    print(f"Total samples: {num_samples}")
+    print(f"Training samples: {len(t_train)}")
+
+    # 3. Initialize and Train the PINN (Stage 1)
+    print("Stage 1: PINN kinematic smoothing")
     pinn_model = train_pinn(t_train, r_train, epochs=2000)
 
     # 4. Save the smoothed model

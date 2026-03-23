@@ -1,10 +1,12 @@
+import os
 import torch
 import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
 from src.models.pinn import KinematicPINN
 from src.physics.orbits import OrbitPhysics
 
-def train_pinn(t_train, r_train, epochs=2000, batch_size=4096):
+def train_pinn(t_train, r_train, epochs=2000, batch_size=4096, resume=True,
+               checkpoint_dir='data/processed', save_freq=5):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     physics = OrbitPhysics()
     model = KinematicPINN().to(device)
@@ -25,12 +27,32 @@ def train_pinn(t_train, r_train, epochs=2000, batch_size=4096):
                 p.data = p.data - self.lr * p.grad
 
     optimizer = optim.Adam(model.parameters(), lr=1e-3)
+
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    checkpoint_path = os.path.join(checkpoint_dir, 'pinn_checkpoint.pth')
+
+    start_epoch = 0
+    if resume and os.path.exists(checkpoint_path):
+        try:
+            ckpt = torch.load(checkpoint_path, map_location=device)
+            model.load_state_dict(ckpt.get('model_state', {}))
+            optim_state = ckpt.get('optim_state', None)
+            if optim_state is not None:
+                try:
+                    optimizer.load_state_dict(optim_state)
+                except Exception:
+                    # optimizer state may be incompatible across torch versions
+                    pass
+            start_epoch = ckpt.get('epoch', 0) + 1
+            print(f"Resuming training from epoch {start_epoch}")
+        except Exception as e:
+            print(f"Failed to load checkpoint: {e}. Starting from scratch.")
     
     # Create DataLoader for batching
     dataset = TensorDataset(t_train, r_train)
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
-    for epoch in range(epochs):
+    for epoch in range(start_epoch, epochs):
         epoch_loss = 0
         for batch_t, batch_r in loader:
             batch_t = batch_t.to(device).requires_grad_(True)
@@ -78,8 +100,29 @@ def train_pinn(t_train, r_train, epochs=2000, batch_size=4096):
             
             epoch_loss += total_loss.item()
             
-        if epoch % 100 == 0:
+        if epoch % 10 == 0:
             avg_loss = epoch_loss / len(loader)
             print(f"Epoch {epoch} | Avg Loss: {avg_loss:.2e}")
+
+        # Periodically save checkpoint so we can resume later
+        if (epoch + 1) % save_freq == 0:
+            try:
+                ckpt = {
+                    'epoch': epoch,
+                    'model_state': model.state_dict(),
+                    'optim_state': optimizer.state_dict() if hasattr(optimizer, 'state_dict') else None,
+                }
+                torch.save(ckpt, checkpoint_path)
+                print(f"Saved checkpoint at epoch {epoch} -> {checkpoint_path}")
+            except Exception as e:
+                print(f"Warning: failed to save checkpoint: {e}")
             
+    # Save final model and final checkpoint
+    final_model_path = os.path.join(checkpoint_dir, 'pinn_smoother.pth')
+    torch.save(model.state_dict(), final_model_path)
+    try:
+        torch.save({'epoch': epochs - 1, 'model_state': model.state_dict(), 'optim_state': optimizer.state_dict()}, checkpoint_path)
+    except Exception:
+        pass
+    print(f"Final model saved to {final_model_path}")
     return model

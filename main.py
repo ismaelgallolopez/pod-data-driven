@@ -1,9 +1,7 @@
-import os
-# Disable torch.compile / dynamo if it causes import errors in this environment
-os.environ.setdefault('TORCH_COMPILE_DISABLE', '1')
 import torch
 from torch.utils.data import DataLoader, TensorDataset
 from src.training.train_pinn import train_pinn
+import os
 
 def main():
     # 1. Load the tensorized data

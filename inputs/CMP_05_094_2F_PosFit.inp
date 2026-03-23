@@ -1,0 +1,81 @@
+%
+% CMP_05_094_2F_PosFit.inp
+% CHAMP setup file for dynamic ephemeris filtering
+%
+
+% Observations
+NAV_FILE            CMP_05_094_2F_SPPLEO.sp3
+
+NAV_START           2005/04/04  00:00:00.000
+NAV_END             2005/04/04  23:59:30.000
+NAV_STEP            1
+EPH_STEP            10
+
+% GPS orbit and clock data
+GPS_ORB_FILE        /home/ae4872/Resources/IGS/codx13170.sp3
+GPS_ORB_FILE        /home/ae4872/Resources/IGS/codx13171.sp3
+GPS_ORB_FILE        /home/ae4872/Resources/IGS/codx13172.sp3
+
+% GPS spacecraft description
+ANTENNA_FILE        /home/ae4872/Models/igs05_1467_gnss.atx
+ANTENNA_FILE        /home/ae4872/Models/CMP_pod_est.atx
+
+% Reference orbit
+REF_ORBIT           /home/ae4872/Resources/Champ/CMP_05_094.sp3
+
+% Processing options
+DUAL_FREQUENCY
+ITERATIONS          3
+PHASE_WINDUP_MODEL  CODE              % IGS, CODE, or NONE
+
+% Ephemeris range
+EPH_STEP            30                % [s]
+
+% Spacecraft parameters
+SC_MASS             500.0             % [kg]
+SC_AREA             0.5               % [m^2]
+SC_CR               10.0              % Radiation pressure coefficient
+SC_CD               2.1               % Drag coefficient
+SC_ID               L06               % SP3 spacecraft identifier
+
+% Antenna offset in spacecraft body axes [m]
+ANTENNA_NAME        CMP_POD_EST
+ANTENNA_BORESIGHT   +0.000  +0.000  -1.000
+ANTENNA_AZIMUTH     +1.000  +0.000  +0.000
+ANTENNA_OFFSET      -1.4880   0.0000   -0.3928
+ATTITUDE_FILE       /home/ae4872/Resources/Champ/CMP_05_094.att
+
+% Data editing 
+EDIT_SNR            15.0
+EDIT_ELEV           5.0               % [deg]
+EDIT_SIG_PR         0.6               % [m]
+EDIT_SIG_DCP        0.03              % [m]
+EDIT_NOBS           2                 % presently unused !!
+
+% Filter settings
+FILTER_POS          100.0             % Position [m]
+FILTER_VEL          100.0             % Velocity [m/s]
+FILTER_CR           0.500             % Radiation pressure coefficient
+FILTER_CD           1.0000            % Drag coefficient
+FILTER_A_EMP_RAD    5.0e-9            % Empirical accelerations [m/s^2]
+FILTER_A_EMP_TANG   50.0e-9           % in radial, tangential, normal
+FILTER_A_EMP_NORM   50.0e-9           % direction
+FILTER_A_EMP_TAU    600.0             % Emp. accel. time interval [s]
+
+SIGMA_OBS           2.000
+EDIT_OBS            10.00
+
+% Gravity model
+GRAVITY_MODEL_FILE  /home/ae4872/Models/Grav_GGM02S.dat
+GRAVITY_MODEL_N     100
+GRAVITY_MODEL_M     100
+
+% Ocean tide model
+OCEAN_TIDE_FILE     /home/ae4872/Models/OTIDES.TOPEX_4.0
+
+% Solar-terrestrial flux
+FLUX_FILE           /home/ae4872/Models/flux.final
+
+% Earth rotation parameters
+LEAPS_FILE          /home/ae4872/Models/leapsec.txt
+EOP_FILE            /home/ae4872/Models/igs96p02.erp

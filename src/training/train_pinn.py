@@ -7,7 +7,7 @@ from src.models.pinn import KinematicPINN
 from src.physics.orbits import OrbitPhysics
 
 def train_pinn(t_train, r_train, epochs=2000, batch_size=4096, resume=True,
-               checkpoint_dir='data/processed', save_freq=5):
+               checkpoint_dir='data/processed', save_freq=5, pde_weight=1.0):
     # Suppress specific noisy warnings about torch.load and DML operator fallbacks
     warnings.filterwarnings("ignore", message=".*torch.load.*weights_only.*", category=FutureWarning)
     warnings.filterwarnings("ignore", message=".*not currently supported on the DML backend.*", category=UserWarning)
@@ -60,26 +60,48 @@ def train_pinn(t_train, r_train, epochs=2000, batch_size=4096, resume=True,
 
     start_epoch = 0
     if resume and os.path.exists(checkpoint_path):
+        ckpt = None
         try:
-            # load on CPU first to avoid device mapping issues (DirectML tensors may not map directly)
+            # Prefer safe weights-only load when supported
             try:
                 ckpt = torch.load(checkpoint_path, map_location='cpu', weights_only=True)
             except TypeError:
+                # older torch doesn't accept weights_only kwarg
                 ckpt = torch.load(checkpoint_path, map_location='cpu')
-            model.load_state_dict(ckpt.get('model_state', {}))
-            # ensure model is on the chosen device
-            model.to(device)
-            optim_state = ckpt.get('optim_state', None)
-            if optim_state is not None:
-                try:
-                    optimizer.load_state_dict(optim_state)
-                except Exception:
-                    # optimizer state may be incompatible across torch versions
-                    pass
-            start_epoch = ckpt.get('epoch', 0) + 1
-            print(f"Resuming from epoch {start_epoch}")
         except Exception as e:
-            print(f"Failed to load checkpoint: {e}. Starting from scratch.")
+            # Handle the new weights-only allowlist requirement by adding the needed global
+            err = str(e)
+            if 'Weights only load failed' in err or 'WeightsUnpickler' in err or 'allowlist' in err:
+                try:
+                    # allowlist the specific helper used by some saved checkpoints
+                    from torch._utils import _rebuild_device_tensor_from_numpy
+                    torch.serialization.add_safe_globals([_rebuild_device_tensor_from_numpy])
+                    ckpt = torch.load(checkpoint_path, map_location='cpu', weights_only=True)
+                except Exception:
+                    # Last resort: load without weights_only if the file is trusted
+                    try:
+                        ckpt = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
+                    except Exception as e2:
+                        print(f"Failed to load checkpoint after allowlist: {e2}. Starting from scratch.")
+                        ckpt = None
+            else:
+                print(f"Failed to load checkpoint: {e}. Starting from scratch.")
+
+        if ckpt is not None:
+            try:
+                model.load_state_dict(ckpt.get('model_state', {}))
+                # ensure model is on the chosen device
+                model.to(device)
+                optim_state = ckpt.get('optim_state', None)
+                if optim_state is not None:
+                    try:
+                        optimizer.load_state_dict(optim_state)
+                    except Exception:
+                        pass
+                start_epoch = ckpt.get('epoch', 0) + 1
+                print(f"Resuming from epoch {start_epoch}")
+            except Exception as e:
+                print(f"Failed to apply checkpoint: {e}. Starting from scratch.")
     
     # Prepare tensors and DataLoader for efficient GPU training when available
     t_train = t_train.float()
@@ -132,8 +154,8 @@ def train_pinn(t_train, r_train, epochs=2000, batch_size=4096, resume=True,
             # 4. Data Loss
             loss_data = torch.mean((r_pred - r_target_nd)**2)
             
-            # 5. Combine
-            total_loss = loss_data + 1e-4 * loss_pde
+            # 5. Combine (expose PDE weight for tuning)
+            total_loss = loss_data + pde_weight * loss_pde
             total_loss.backward()
             optimizer.step()
             

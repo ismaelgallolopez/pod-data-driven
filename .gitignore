@@ -4,3 +4,80 @@ __pycache__/
 
 # Compiled Python files
 *.pyc
+
+# C extensions
+*.so
+*.pyd
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+*.whl
+
+# Virtual environments
+.env
+.venv/
+venv/
+env/
+ENV/
+
+# IDEs and editors
+.vscode/
+.idea/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Logs and databases
+*.log
+logs/
+*.sqlite3
+*.db
+
+# Testing
+.coverage
+coverage.xml
+htmlcov/
+.pytest_cache/
+.tox/
+.nox/
+
+# Caches and linters
+.mypy_cache/
+.cache/
+.pyre/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Model checkpoints / artifacts
+checkpoints/
+*.ckpt
+*.pth
+*.pt
+*.h5
+
+# Data / outputs (adjust if you want some processed data tracked)
+data/processed/
+outputs/
+results/
+models/
+
+# Secrets and keys
+*.pem
+*.key
+*.crt
+
+# Misc
+*.egg
+.eggs/
+__pycache__/

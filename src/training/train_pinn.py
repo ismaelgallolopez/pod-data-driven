@@ -1,4 +1,5 @@
 import os
+import warnings
 import torch
 import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
@@ -7,9 +8,35 @@ from src.physics.orbits import OrbitPhysics
 
 def train_pinn(t_train, r_train, epochs=2000, batch_size=4096, resume=True,
                checkpoint_dir='data/processed', save_freq=5):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # Suppress specific noisy warnings about torch.load and DML operator fallbacks
+    warnings.filterwarnings("ignore", message=".*torch.load.*weights_only.*", category=FutureWarning)
+    warnings.filterwarnings("ignore", message=".*not currently supported on the DML backend.*", category=UserWarning)
+
+    # Prefer available GPU-like accelerators in order: DirectML -> CUDA -> MPS -> CPU
+    device = None
+    try:
+        import torch_directml
+        device = torch_directml.device()
+        print("Using DirectML:", device)
+    except Exception:
+        if torch.cuda.is_available():
+            device = torch.device("cuda")
+            print("Using CUDA")
+        else:
+            # Apple MPS (macOS) fallback
+            try:
+                if getattr(torch.backends, 'mps', None) is not None and torch.backends.mps.is_available():
+                    device = torch.device('mps')
+                    print('Using Apple MPS')
+                else:
+                    device = torch.device('cpu')
+                    print('Using CPU')
+            except Exception:
+                device = torch.device('cpu')
+                print('Using CPU')
     physics = OrbitPhysics()
     model = KinematicPINN().to(device)
+    print(f"Trainer: {device} | batch_size: {batch_size}")
     # Fallback simple optimizer to avoid torch._dynamo import issues in some environments
     class SimpleSGD:
         def __init__(self, params, lr=1e-3):
@@ -34,8 +61,14 @@ def train_pinn(t_train, r_train, epochs=2000, batch_size=4096, resume=True,
     start_epoch = 0
     if resume and os.path.exists(checkpoint_path):
         try:
-            ckpt = torch.load(checkpoint_path, map_location=device)
+            # load on CPU first to avoid device mapping issues (DirectML tensors may not map directly)
+            try:
+                ckpt = torch.load(checkpoint_path, map_location='cpu', weights_only=True)
+            except TypeError:
+                ckpt = torch.load(checkpoint_path, map_location='cpu')
             model.load_state_dict(ckpt.get('model_state', {}))
+            # ensure model is on the chosen device
+            model.to(device)
             optim_state = ckpt.get('optim_state', None)
             if optim_state is not None:
                 try:
@@ -44,13 +77,19 @@ def train_pinn(t_train, r_train, epochs=2000, batch_size=4096, resume=True,
                     # optimizer state may be incompatible across torch versions
                     pass
             start_epoch = ckpt.get('epoch', 0) + 1
-            print(f"Resuming training from epoch {start_epoch}")
+            print(f"Resuming from epoch {start_epoch}")
         except Exception as e:
             print(f"Failed to load checkpoint: {e}. Starting from scratch.")
     
-    # Create DataLoader for batching
+    # Prepare tensors and DataLoader for efficient GPU training when available
+    t_train = t_train.float()
+    r_train = r_train.float()
+    pin_memory = True if getattr(device, 'type', None) == 'cuda' else False
+    num_workers = 2 if pin_memory else 0
+
     dataset = TensorDataset(t_train, r_train)
-    loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+    loader = DataLoader(dataset, batch_size=batch_size, shuffle=True,
+                        pin_memory=pin_memory, num_workers=num_workers)
 
     for epoch in range(start_epoch, epochs):
         epoch_loss = 0
@@ -113,7 +152,7 @@ def train_pinn(t_train, r_train, epochs=2000, batch_size=4096, resume=True,
                     'optim_state': optimizer.state_dict() if hasattr(optimizer, 'state_dict') else None,
                 }
                 torch.save(ckpt, checkpoint_path)
-                print(f"Saved checkpoint at epoch {epoch} -> {checkpoint_path}")
+                print(f"Saved checkpoint: {checkpoint_path} (epoch {epoch})")
             except Exception as e:
                 print(f"Warning: failed to save checkpoint: {e}")
             

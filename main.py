@@ -25,6 +25,29 @@ def main():
     t = data[:, 0]
     r = data[:, 1:4] # Position in km
 
+    # Optionally load truth (if present) — not required for filtering
+    truth_path = 'data/processed/truth_odcp.pt'
+    truth = None
+    if os.path.exists(truth_path):
+        try:
+            truth = torch.load(truth_path)
+        except Exception:
+            truth = None
+
+    # ── Filter SPP outliers before training
+    # Use a fixed physical threshold on |r| (km) to remove bad GNSS fixes.
+    r_mag = torch.norm(r, dim=1)
+    r_med = r_mag.median()
+    mask = (r_mag - r_med).abs() < 30.0   # keep points within ±30 km of median
+    n_removed = (~mask).sum().item()
+    if n_removed > 0:
+        pct = 100.0 * n_removed / len(t)
+        print(f"Removed {n_removed} outlier epochs ({pct:.1f}%)")
+        t = t[mask]
+        r = r[mask]
+    else:
+        print("No outlier SPP epochs found")
+
     # 2. Chronological Split
     num_samples = len(t)
     train_idx = int(num_samples * 0.8)

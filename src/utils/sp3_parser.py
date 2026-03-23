@@ -35,8 +35,12 @@ def process_sp3_file(file_path, sc_id=None, origin_dt=None):
     with open(file_path, 'r') as f:
         current_t = None
         for line in f:
-            if line.startswith('/*'):  # EOF
+            # SP3 EOF marker is literally 'EOF' on its own line. Lines starting
+            # with '/*' are header comments/padding and should be skipped.
+            if line.strip() == 'EOF':
                 break
+            if line.startswith('/*'):
+                continue
 
             if line.startswith('* '):  # Epoch header line
                 parts = line.split()

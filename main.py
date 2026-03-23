@@ -25,20 +25,35 @@ def main():
     t = data[:, 0]
     r = data[:, 1:4] # Position in km
 
-    # Optionally load truth (if present) — not required for filtering
-    truth_path = 'data/processed/truth_odcp.pt'
-    truth = None
-    if os.path.exists(truth_path):
+    # Optionally load truth (if present) — use safe loader to avoid FutureWarning
+    def _safe_torch_load(path):
         try:
-            truth = torch.load(truth_path)
+            return torch.load(path, weights_only=True)
+        except TypeError:
+            # older torch doesn't accept weights_only kwarg
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", message=".*torch.load.*weights_only.*", category=FutureWarning)
+                try:
+                    return torch.load(path)
+                except Exception:
+                    return None
         except Exception:
-            truth = None
+            return None
 
-    # ── Filter SPP outliers before training
-    # Use a fixed physical threshold on |r| (km) to remove bad GNSS fixes.
+    truth_path = 'data/processed/truth_odcp.pt'
+    truth = _safe_torch_load(truth_path) if os.path.exists(truth_path) else None
+
+    # ── Filter SPP outliers before training (IQR-based)
+    # Use interquartile range to catch genuine outliers while ignoring orbital
+    # oscillation. We use a loose multiplier (10× IQR) to only remove gross bad fixes.
     r_mag = torch.norm(r, dim=1)
-    r_med = r_mag.median()
-    mask = (r_mag - r_med).abs() < 30.0   # keep points within ±30 km of median
+    q25 = r_mag.quantile(0.25)
+    q75 = r_mag.quantile(0.75)
+    iqr = q75 - q25
+    lower = q25 - 10.0 * iqr
+    upper = q75 + 10.0 * iqr
+
+    mask = (r_mag >= lower) & (r_mag <= upper)
     n_removed = (~mask).sum().item()
     if n_removed > 0:
         pct = 100.0 * n_removed / len(t)

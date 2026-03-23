@@ -14,22 +14,33 @@ def parse_sp3_line(line):
     except (ValueError, IndexError):
         return None, None, None
 
-def process_sp3_file(file_path):
-    """Extracts time and ECEF coordinates from an SP3 file."""
+def process_sp3_file(file_path, sc_id=None, origin_dt=None):
+    """Extracts time and ECEF coordinates from an SP3 file.
+
+    Args:
+        file_path: path to .sp3 file
+        sc_id: optional satellite id string (e.g., 'L06' or 'G01'). If provided,
+               only lines starting with f'P{sc_id}' are parsed. If None, all 'P' lines are
+               considered (backwards compatible).
+        origin_dt: optional datetime to use as the global time origin. If None,
+                   the first epoch in the first file processed becomes the origin.
+
+    Returns:
+        epochs (np.array), positions (np.array), origin_dt_used (datetime)
+    """
     epochs = []
     positions = []
-    start_dt = None
+    origin = origin_dt
 
     with open(file_path, 'r') as f:
         current_t = None
         for line in f:
-            if line.startswith('/*'): # EOF
+            if line.startswith('/*'):  # EOF
                 break
-                
+
             if line.startswith('* '):  # Epoch header line
                 parts = line.split()
                 try:
-                    # Indexing into parts after split: 0='*', 1=YYYY, 2=MM, 3=DD, 4=HH, 5=MM, 6=SS(.sss)
                     year = int(parts[1])
                     month = int(parts[2])
                     day = int(parts[3])
@@ -38,21 +49,32 @@ def process_sp3_file(file_path):
                     second = int(float(parts[6]))
 
                     dt = datetime(year, month, day, hour, minute, second)
-                    if start_dt is None:
-                        start_dt = dt
-                    current_t = (dt - start_dt).total_seconds()
+                    if origin is None:
+                        origin = dt
+                    current_t = (dt - origin).total_seconds()
                 except (ValueError, IndexError):
                     continue
-            
-            elif line.startswith('P') and current_t is not None:
+
+            else:
+                # Satellite position lines start with 'P<satid>' like 'PL06' or 'PG01'
+                if current_t is None:
+                    continue
+                if sc_id is not None:
+                    prefix = f'P{sc_id}'
+                    if not line.startswith(prefix):
+                        continue
+                else:
+                    if not line.startswith('P'):
+                        continue
+
                 x, y, z = parse_sp3_line(line)
                 if x is not None:
                     epochs.append(current_t)
                     positions.append([x, y, z])
 
-    return np.array(epochs), np.array(positions)
+    return np.array(epochs), np.array(positions), origin
 
-def run_extraction(input_dir='inputs', output_dir='data/processed'):
+def run_extraction(input_dir='inputs', output_dir='data/processed', sc_id=None):
     os.makedirs(output_dir, exist_ok=True)
     
     noisy_data = []
@@ -63,11 +85,12 @@ def run_extraction(input_dir='inputs', output_dir='data/processed'):
         print(f"No .sp3 files found in {input_dir}")
         return
 
+    origin_dt = None
     for file in sorted(files):
         path = os.path.join(input_dir, file)
         print(f"Processing {file}...")
-        t, pos = process_sp3_file(path)
-        
+        t, pos, origin_dt = process_sp3_file(path, sc_id=sc_id, origin_dt=origin_dt)
+
         if len(t) == 0:
             continue
 

@@ -60,6 +60,18 @@ def train_pinn(t_train, r_train, epochs=2000, batch_size=4096, resume=True,
 
     # ── Optimiser ────────────────────────────────────────────────────────────
     optimizer = optim.Adam(model.parameters(), lr=1e-3)
+    # Learning rate scheduler to reduce LR on plateau of data loss
+    # Scheduler tries to rescue from plateaus before early stopping
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode='min', factor=0.5, patience=30, min_lr=1e-6, verbose=True
+    )
+
+    # Early stopping bookkeeping
+    best_loss = float('inf')
+    best_epoch = 0
+    plateau_count = 0
+    PATIENCE = 100
+    MIN_DELTA = 1e-7
 
     # ── Checkpoint resume ────────────────────────────────────────────────────
     os.makedirs(checkpoint_dir, exist_ok=True)
@@ -147,11 +159,40 @@ def train_pinn(t_train, r_train, epochs=2000, batch_size=4096, resume=True,
             epoch_loss_data += loss_data.item()
             epoch_loss_pde  += loss_pde.item()
 
+        # Step scheduler on the data loss (avg per-batch)
+        n = len(loader)
+        avg_data = epoch_loss_data / n
+        avg_pde = epoch_loss_pde / n
+        scheduler.step(avg_data)
+
+        # Early-stopping: track best avg_data and count plateaus
+        if avg_data < best_loss - MIN_DELTA:
+            best_loss = avg_data
+            best_epoch = epoch
+            plateau_count = 0
+            # Save best model snapshot
+            try:
+                torch.save({
+                    'epoch':       epoch,
+                    'model_state': model.state_dict(),
+                    'optim_state': optimizer.state_dict(),
+                    't_min':       t_min.item(),
+                    't_scale':     t_scale,
+                }, os.path.join(checkpoint_dir, 'pinn_best.pth'))
+            except Exception:
+                pass
+        else:
+            plateau_count += 1
+
         if epoch % 10 == 0:
-            n = len(loader)
-            print(f"Epoch {epoch:4d} | "
-                  f"data={epoch_loss_data/n:.3e} | "
-                  f"pde={epoch_loss_pde/n:.3e}")
+            phase = "data-only" if epoch < data_only_epochs else "physics"
+            print(f"Epoch {epoch:4d} [{phase}] | "
+                  f"data={avg_data:.3e} | pde={avg_pde:.3e} | lr={optimizer.param_groups[0]['lr']:.2e}")
+
+        # Check early-stopping condition
+        if plateau_count >= PATIENCE:
+            print(f"\nEarly stopping at epoch {epoch} (no improvement since epoch {best_epoch}, best loss={best_loss:.3e})")
+            break
 
         if (epoch + 1) % save_freq == 0:
             try:
@@ -175,5 +216,15 @@ def train_pinn(t_train, r_train, epochs=2000, batch_size=4096, resume=True,
         'L_star':      physics.L_star,
         'T_star':      physics.T_star,
     }, final_path)
+    # If we saved a best model earlier, load that instead of last epoch
+    best_path = os.path.join(checkpoint_dir, 'pinn_best.pth')
+    if os.path.exists(best_path):
+        try:
+            ckpt = torch.load(best_path, map_location='cpu')
+            model.load_state_dict(ckpt['model_state'])
+            print(f"Loaded best model from epoch {ckpt.get('epoch', '?')} (best data loss={best_loss:.3e})")
+        except Exception:
+            print("Warning: failed to load best model; returning final model")
+
     print(f"Final model saved to {final_path}")
     return model

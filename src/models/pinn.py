@@ -5,14 +5,34 @@ import numpy as np
 class FourierEmbedding(nn.Module):
     """
     Maps t ∈ [0,1] to sinusoidal features spanning the relevant frequency range.
-    
-    For CHAMP over 30 days:
-      - Orbital period ~92 min → ~470 cycles in [0,1]
-      - We need frequencies from 1 (secular drift) up to ~512 (sub-orbital)
+
+    Builds dual-grid embedding:
+    - Linear grid: 1 to n_orbits+10 (orbital oscillations)
+    - Logspace grid: 0.1 to 1.0 (secular drift)
     """
-    def __init__(self, num_frequencies=64):
+    def __init__(self, num_frequencies=128, t_scale=None):
         super().__init__()
-        freqs = torch.logspace(0, np.log10(512), num_frequencies)
+
+        if t_scale is None:
+            # Fallback: assume 30 days
+            t_scale = 30 * 86400
+            print("Warning: t_scale not provided to FourierEmbedding; using default 30 days")
+
+        # Compute number of orbital cycles (92 min = 5520 s per orbit)
+        n_orbits = t_scale / 5520.0
+
+        # For num_frequencies=64 (old checkpoint), use legacy format
+        if num_frequencies == 64:
+            freqs = torch.logspace(0, np.log10(512), 64)
+        else:
+            # Dual-grid for 128+ frequencies
+            # Linear grid for orbital band: 1 to n_orbits+10
+            freqs_linear = torch.linspace(1.0, n_orbits + 10.0, num_frequencies - 16)
+            # Logspace grid for secular drift: 0.1 to 1.0
+            freqs_log = torch.logspace(-1.0, 0.0, 16)
+            # Concatenate both grids
+            freqs = torch.cat([freqs_log, freqs_linear])
+
         self.register_buffer('freqs', freqs)
 
     def forward(self, t):
@@ -25,7 +45,7 @@ class FourierEmbedding(nn.Module):
 
 
 class KinematicPINN(nn.Module):
-    def __init__(self, num_frequencies=64, hidden=256, depth=5):
+    def __init__(self, num_frequencies=128, hidden=256, depth=5, t_scale=None):
         super().__init__()
         in_dim = 2 * num_frequencies + 1
 
@@ -34,7 +54,7 @@ class KinematicPINN(nn.Module):
             layers += [nn.Linear(hidden, hidden), nn.Tanh()]
         layers += [nn.Linear(hidden, 3)]
 
-        self.embedding = FourierEmbedding(num_frequencies)
+        self.embedding = FourierEmbedding(num_frequencies=num_frequencies, t_scale=t_scale)
         self.net = nn.Sequential(*layers)
         self._init_weights()
 

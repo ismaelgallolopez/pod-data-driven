@@ -63,19 +63,15 @@ def main():
     else:
         print("No outlier SPP epochs found")
 
-    # 2. Chronological Split
+    # 2. Train on full dataset (no held-out test split for a smoother)
     num_samples = len(t)
-    train_idx = int(num_samples * 0.8)
-    
-    t_train, r_train = t[:train_idx], r[:train_idx]
-    t_test, r_test = t[train_idx:], r[train_idx:]
 
     print(f"Total samples: {num_samples}")
-    print(f"Training samples: {len(t_train)}")
+    print(f"Training on all samples (full dataset for smoother)")
 
     # 3. Initialize and Train the PINN (Stage 1)
-    print("Stage 1: PINN kinematic smoothing")
-    pinn_model = train_pinn(t_train, r_train, epochs=2000)
+    print("Stage 1: PINN kinematic smoothing (full dataset)")
+    pinn_model = train_pinn(t, r, epochs=2000)
 
     # 4. Save the smoothed model
     torch.save(pinn_model.state_dict(), 'data/processed/pinn_smoother.pth')

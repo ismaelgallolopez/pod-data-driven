@@ -17,13 +17,6 @@ dist/
 pip-wheel-metadata/
 *.whl
 
-# Virtual environments
-.env
-.venv/
-venv/
-env/
-ENV/
-
 # IDEs and editors
 .vscode/
 .idea/
@@ -58,19 +51,6 @@ htmlcov/
 .DS_Store
 Thumbs.db
 desktop.ini
-
-# Model checkpoints / artifacts
-checkpoints/
-*.ckpt
-*.pth
-*.pt
-*.h5
-
-# Data / outputs (adjust if you want some processed data tracked)
-data/processed/
-outputs/
-results/
-models/
 
 # Secrets and keys
 *.pem

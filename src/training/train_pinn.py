@@ -7,9 +7,9 @@ from src.models.pinn import KinematicPINN
 from src.physics.orbits import OrbitPhysics
 
 
-def train_pinn(t_train, r_train, epochs=2000, batch_size=4096, resume=True,
+def train_pinn(t_train, r_train, epochs=2000, batch_size=512, resume=True,
                checkpoint_dir='data/processed', save_freq=5,
-               pde_weight=1e-4, data_only_epochs=200):
+               pde_weight=1e-7, data_only_epochs=500):
 
     warnings.filterwarnings("ignore", message=".*torch.load.*weights_only.*", category=FutureWarning)
     warnings.filterwarnings("ignore", message=".*not currently supported on the DML backend.*", category=UserWarning)
@@ -37,14 +37,17 @@ def train_pinn(t_train, r_train, epochs=2000, batch_size=4096, resume=True,
                 print('Using CPU')
 
     physics = OrbitPhysics()
-    model   = KinematicPINN().to(device)
-    print(f"Trainer: {device} | batch_size: {batch_size}")
 
-    # ── Normalise BEFORE anything touches the network ────────────────────────
-    # Time: map [t_min, t_max] → [0, 1]
+    # ── Compute time scale BEFORE building model (needed for frequency embedding) ──
     t_min   = t_train.min()
     t_max   = t_train.max()
     t_scale = (t_max - t_min).item()          # seconds spanned; keep as Python float
+
+    # ── Build model with data-informed frequency embedding ────────────────────────
+    model   = KinematicPINN(t_scale=t_scale).to(device)
+    print(f"Trainer: {device} | batch_size: {batch_size} | t_scale: {t_scale/3600:.1f} hours | n_orbits: {t_scale/5520:.1f}")
+
+    # ── Normalise time to [0, 1] ──────────────────────────────────────────────
     t_norm  = ((t_train - t_min) / t_scale).float()   # in [0, 1]
 
     # Position: km → m → non-dimensional (÷ R_earth)
@@ -62,8 +65,9 @@ def train_pinn(t_train, r_train, epochs=2000, batch_size=4096, resume=True,
     optimizer = optim.Adam(model.parameters(), lr=1e-3)
     # Learning rate scheduler to reduce LR on plateau of data loss
     # Scheduler tries to rescue from plateaus before early stopping
+    # 'verbose' arg isn't available in older torch versions — omit for compatibility
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='min', factor=0.5, patience=30, min_lr=1e-6, verbose=True
+        optimizer, mode='min', factor=0.5, patience=30, min_lr=1e-6
     )
 
     # Early stopping bookkeeping
@@ -98,6 +102,7 @@ def train_pinn(t_train, r_train, epochs=2000, batch_size=4096, resume=True,
             print(f"Failed to load checkpoint: {e}. Starting from scratch.")
 
     # ── Training loop ────────────────────────────────────────────────────────
+    loss_history = []
     for epoch in range(start_epoch, epochs):
         epoch_loss_data = 0.0
         epoch_loss_pde  = 0.0
@@ -163,7 +168,17 @@ def train_pinn(t_train, r_train, epochs=2000, batch_size=4096, resume=True,
         n = len(loader)
         avg_data = epoch_loss_data / n
         avg_pde = epoch_loss_pde / n
+        total_avg = avg_data + (float(pde_weight) if epoch >= data_only_epochs else 0.0) * avg_pde
+        loss_history.append(total_avg)
         scheduler.step(avg_data)
+
+        # Report loss at specific epochs: 0, 100, 200, 500, 1000, 2000
+        report_epochs = [0, 100, 200, 500, 1000, 2000]
+        if epoch in report_epochs:
+            if epoch == 0:
+                print(f"\n=== Loss Convergence by Epoch ===")
+            ratio = avg_pde / avg_data if avg_data > 0 else float('inf')
+            print(f"Epoch {epoch:4d}: data={avg_data:.4f} | pde={avg_pde:.6f} | ratio={ratio:.4f}")
 
         # Early-stopping: track best avg_data and count plateaus
         if avg_data < best_loss - MIN_DELTA:
@@ -174,10 +189,10 @@ def train_pinn(t_train, r_train, epochs=2000, batch_size=4096, resume=True,
             try:
                 torch.save({
                     'epoch':       epoch,
-                    'model_state': model.state_dict(),
+                    'model_state': {k: v.cpu() for k, v in model.state_dict().items()},
                     'optim_state': optimizer.state_dict(),
-                    't_min':       t_min.item(),
-                    't_scale':     t_scale,
+                    't_min':       t_min.item() if hasattr(t_min, 'item') else float(t_min),
+                    't_scale':     float(t_scale),
                 }, os.path.join(checkpoint_dir, 'pinn_best.pth'))
             except Exception:
                 pass
@@ -186,8 +201,9 @@ def train_pinn(t_train, r_train, epochs=2000, batch_size=4096, resume=True,
 
         if epoch % 10 == 0:
             phase = "data-only" if epoch < data_only_epochs else "physics"
+            ratio = avg_pde / avg_data if avg_data > 0 else float('inf')
             print(f"Epoch {epoch:4d} [{phase}] | "
-                  f"data={avg_data:.3e} | pde={avg_pde:.3e} | lr={optimizer.param_groups[0]['lr']:.2e}")
+                  f"data={avg_data:.3e} | pde={avg_pde:.3e} | ratio={ratio:.3e} | lr={optimizer.param_groups[0]['lr']:.2e}")
 
         # Check early-stopping condition
         if plateau_count >= PATIENCE:
@@ -198,10 +214,10 @@ def train_pinn(t_train, r_train, epochs=2000, batch_size=4096, resume=True,
             try:
                 ckpt = {
                     'epoch':       epoch,
-                    'model_state': model.state_dict(),
+                    'model_state': {k: v.cpu() for k, v in model.state_dict().items()},
                     'optim_state': optimizer.state_dict(),
-                    't_min':       t_min.item(),
-                    't_scale':     t_scale,
+                    't_min':       t_min.item() if hasattr(t_min, 'item') else float(t_min),
+                    't_scale':     float(t_scale),
                 }
                 torch.save(ckpt, checkpoint_path)
             except Exception as e:
@@ -210,9 +226,9 @@ def train_pinn(t_train, r_train, epochs=2000, batch_size=4096, resume=True,
     # ── Save final model ─────────────────────────────────────────────────────
     final_path = os.path.join(checkpoint_dir, 'pinn_smoother.pth')
     torch.save({
-        'model_state': model.state_dict(),
-        't_min':       t_min.item(),
-        't_scale':     t_scale,
+        'model_state': {k: v.cpu() for k, v in model.state_dict().items()},
+        't_min':       t_min.item() if hasattr(t_min, 'item') else float(t_min),
+        't_scale':     float(t_scale),
         'L_star':      physics.L_star,
         'T_star':      physics.T_star,
     }, final_path)

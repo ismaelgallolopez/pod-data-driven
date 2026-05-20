@@ -14,7 +14,7 @@
 mkdir -p logs
 
 # Load modules
-module load 2023r1 python/3.10.4 cuda/11.7
+module load 2025 python/3.11.9 cuda/12.1
 
 # Activate virtual environment
 source $SLURM_SUBMIT_DIR/.venv/bin/activate

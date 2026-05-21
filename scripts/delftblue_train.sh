@@ -1,33 +1,24 @@
 #!/bin/bash
-#SBATCH --job-name=pod-pinn
-#SBATCH --partition=gpu
-#SBATCH --nodes=1
+#SBATCH --job-name=pod-pinn-train
+#SBATCH --partition=gpu-v100
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --gpus-per-task=1
-#SBATCH --mem=16G
+#SBATCH --mem-per-cpu=4G
 #SBATCH --time=02:00:00
-#SBATCH --output=logs/train_%j.log
-#SBATCH --error=logs/train_%j.log
+#SBATCH --output=logs/train_%j.out
+#SBATCH --error=logs/train_%j.err
 
-# Create logs directory
-mkdir -p logs
+module load miniconda3
+module load cuda/12.1
+source $(conda info --base)/etc/profile.d/conda.sh
+conda activate pod-pinn
 
-# Load modules
-module load 2025 python/3.11.9 cuda/12.1
-
-# Activate virtual environment
-source $SLURM_SUBMIT_DIR/.venv/bin/activate
-
-# Print GPU info for confirmation
-echo "=========================================="
-echo "GPU Configuration"
-echo "=========================================="
-nvidia-smi
-
-# Set environment
+export LD_LIBRARY_PATH=$CONDA_PREFIX/lib:$LD_LIBRARY_PATH
 export PYTHONPATH=$SLURM_SUBMIT_DIR
 
-# Run training
 cd $SLURM_SUBMIT_DIR
+
+nvidia-smi
 python main.py
+echo "Training finished: $(date)"

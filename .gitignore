@@ -27,7 +27,6 @@ pip-wheel-metadata/
 
 # Logs and databases
 *.log
-logs/
 *.sqlite3
 *.db
 

@@ -46,7 +46,7 @@ def load_model():
     """Load trained PINN model."""
     ckpt = _safe_load('data/processed/pinn_best.pth')
     embedding_size = ckpt['model_state']['embedding.freqs'].shape[0]
-    model = KinematicPINN(num_frequencies=embedding_size)
+    model = KinematicPINN(num_frequencies=embedding_size, t_scale=ckpt['t_scale'])
     model.load_state_dict(ckpt['model_state'])
     model.eval()
     return model, ckpt
@@ -141,9 +141,9 @@ def main():
     rms_pinn_xyz = np.sqrt(np.mean(diff_pinn_m**2, axis=0))
     rms_spp_xyz = np.sqrt(np.mean(diff_spp_m**2, axis=0))
 
-    # LVLH components
-    radial_pinn, along_pinn, cross_pinn = compute_lvlh_components(diff_pinn_m, r_tru_interp * 1000.0)
-    radial_spp, along_spp, cross_spp = compute_lvlh_components(diff_spp_m, r_tru_interp * 1000.0)
+    # LVLH components (pass positions, not errors)
+    radial_pinn, along_pinn, cross_pinn = compute_lvlh_components(r_pred_overlap * 1000.0, r_tru_interp * 1000.0)
+    radial_spp, along_spp, cross_spp = compute_lvlh_components(r_spp_overlap * 1000.0, r_tru_interp * 1000.0)
 
     rms_radial_pinn = np.sqrt(np.mean(radial_pinn**2))
     rms_along_pinn = np.sqrt(np.mean(along_pinn**2))

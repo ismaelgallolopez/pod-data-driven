@@ -60,3 +60,5 @@ desktop.ini
 *.egg
 .eggs/
 __pycache__/
+.claude/
+.vscode/

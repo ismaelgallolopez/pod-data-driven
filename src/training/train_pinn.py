@@ -9,7 +9,7 @@ from src.physics.orbits import OrbitPhysics
 
 def train_pinn(t_train, r_train, epochs=2000, batch_size=512, resume=True,
                checkpoint_dir='data/processed', save_freq=5,
-               pde_weight=1e-7, data_only_epochs=500):
+               pde_weight=1e-4, data_only_epochs=200):
 
     warnings.filterwarnings("ignore", message=".*torch.load.*weights_only.*", category=FutureWarning)
     warnings.filterwarnings("ignore", message=".*not currently supported on the DML backend.*", category=UserWarning)
@@ -136,19 +136,19 @@ def train_pinn(t_train, r_train, epochs=2000, batch_size=512, resume=True,
                 a_list.append(gi2.unsqueeze(1))
             a_pred = torch.cat(a_list, dim=1)   # (N, 3)  [non-dim / t_norm²]
 
-            # ── Physics residual: convert derivatives back to physical time
+            # ── Physics residual: compute entirely in non-dimensional units
             # a_pred is d²r / dt_norm² (units: L* / t_norm²)
-            # Convert to physical seconds: a_pred_phys = a_pred / t_scale²  (L* / s²)
-            t_scale_tensor = torch.tensor(t_scale, dtype=torch.float32, device=device)
-            a_pred_phys = a_pred / (t_scale_tensor ** 2)
+            a_pred_nd = a_pred
 
-            # a_physics (from model) is in non-dim / T*² units -> convert to L*/s²
+            # a_physics is in [L* / T*²] units — scale to match t_norm time scale
             a_physics_raw = physics.get_j2_acceleration(r_pred)   # [L* / T*²]
+            t_scale_tensor = torch.tensor(t_scale, dtype=torch.float32, device=device)
             T_star_tensor = torch.tensor(physics.T_star, dtype=torch.float32, device=device)
-            a_physics_phys = a_physics_raw / (T_star_tensor ** 2)
+            # Convert from [L* / T*²] to [L* / t_norm²]: multiply by (t_scale / T_star)²
+            a_physics_scaled = a_physics_raw * ((t_scale_tensor / T_star_tensor) ** 2)
 
             loss_data = torch.mean((r_pred - batch_r) ** 2)
-            loss_pde = torch.mean((a_pred_phys - a_physics_phys) ** 2)
+            loss_pde = torch.mean((a_pred_nd - a_physics_scaled) ** 2)
 
             # Two-phase weighting: data-only warmup, then enable PDE with pde_weight
             omega_pde = 0.0 if epoch < data_only_epochs else float(pde_weight)

@@ -43,12 +43,9 @@ def load_and_filter_data():
 
 
 def load_model():
-    """Load trained PINN model."""
+    """Load trained PINN model (handles both spectral and legacy formats)."""
     ckpt = _safe_load('data/processed/pinn_best.pth')
-    embedding_size = ckpt['model_state']['embedding.freqs'].shape[0]
-    model = KinematicPINN(num_frequencies=embedding_size, t_scale=ckpt['t_scale'])
-    model.load_state_dict(ckpt['model_state'])
-    model.eval()
+    model = KinematicPINN.from_checkpoint(ckpt)
     return model, ckpt
 
 
@@ -102,12 +99,13 @@ def main():
     t_scale = ckpt['t_scale']
     L_star = 6378137.0
 
-    # Infer full dataset
+    # Infer full dataset. t_norm MUST be float64: at ~470 orbital cycles a
+    # float32 normalized time reintroduces the ~hundreds-of-metres phase floor.
     with torch.no_grad():
-        t_norm = (t - t_min) / t_scale
-        r_pred_nd = model(t_norm.float())
+        t_norm = (t.double() - float(t_min)) / float(t_scale)
+        r_pred_nd = model(t_norm)
 
-    r_pred_km = r_pred_nd * L_star / 1000.0
+    r_pred_km = (r_pred_nd * L_star / 1000.0).float()
 
     # Interpolate ODCP truth
     t_np = t.numpy()
@@ -187,18 +185,18 @@ def main():
     print(f"Along-track:     {rms_along_spp/rms_along_pinn:>8.2f}x")
     print(f"Cross-track:     {rms_cross_spp/rms_cross_pinn:>8.2f}x")
 
+    # Robust-fit diagnostics from the checkpoint
     print("\n" + "-"*80)
-    print("GAP-BRIDGING RESULTS")
+    print("SMOOTHER DIAGNOSTICS")
     print("-"*80)
-    print(f"30-min gap (full model, no retrain):  645.1 m RMS")
-    print(f"60-min gap (retrained):               1236.4 m RMS")
-
-    print("\n" + "-"*80)
-    print("TRAINING DIAGNOSTICS")
-    print("-"*80)
-    print(f"Loss at final epoch: data=0.00270, pde=0.001652")
-    print(f"PDE/data ratio:      0.612")
-    print(f"Loss convergence:    35.2x decrease (epoch 0 to 1925)")
+    err_pinn_3d = np.sqrt(np.sum(diff_pinn_m**2, axis=1))
+    print(f"Median 3D error:     {np.median(err_pinn_3d):>8.1f} m")
+    print(f"p90 / p99 3D error:  {np.percentile(err_pinn_3d,90):>8.1f} / "
+          f"{np.percentile(err_pinn_3d,99):.1f} m")
+    if 'robust_kept' in ckpt:
+        print(f"Robust kept fraction:{ckpt['robust_kept']*100:>8.1f} %")
+    if 'phys_lambda' in ckpt:
+        print(f"Physics lambda:      {ckpt['phys_lambda']:>8.2g}")
 
     # --- Generate figures ------------------------------------------------
     print("\n" + "-"*80)

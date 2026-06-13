@@ -22,9 +22,12 @@ class OrbitPhysics:
         a_kep = -r_nd / r_mag**3                                # (N,3)
 
         # J2 — additive correction, NOT multiplicative through a_kep
-        # Standard formula: a_j2_i = -(3/2)*J2*(1/r^5) * r_i * (5*(z/r)^2 - 1)  for i=x,y
-        #                   a_j2_z = -(3/2)*J2*(1/r^5) * z   * (5*(z/r)^2 - 3)
-        c      = -1.5 * self.J2 / r_mag**5                     # (N,1)
+        # a_j2_i = +(3/2)*J2*(1/r^5) * r_i * (5*(z/r)^2 - 1)  for i=x,y
+        # a_j2_z = +(3/2)*J2*(1/r^5) * z   * (5*(z/r)^2 - 3)
+        # Sign check against the potential V = (1/r)(1 - J2 P2(sin phi)/r^2),
+        # a = grad V: at the equator the J2 perturbation points INWARD
+        # (a_x = -1.5 J2 x / r^5 there), which requires c > 0 below.
+        c      = +1.5 * self.J2 / r_mag**5                     # (N,1)
         zr2    = (z / r_mag)**2                                 # (N,1)
 
         a_j2_x = c * r_nd[:, 0:1] * (5*zr2 - 1)

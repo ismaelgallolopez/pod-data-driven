@@ -83,19 +83,16 @@ def main():
     ckpt = _safe_load(checkpoint_path)
     print(f"Loaded checkpoint from {checkpoint_path}")
 
-    model = KinematicPINN()
-
-    if isinstance(ckpt, dict) and 'model_state' in ckpt:
-        model.load_state_dict(ckpt['model_state'])
-        t_min = ckpt['t_min']
-        t_scale = ckpt['t_scale']
-        L_star = ckpt.get('L_star', 6378137.0)
-    else:
+    if not (isinstance(ckpt, dict) and 'model_state' in ckpt):
         print("Unknown checkpoint format")
         sys.exit(1)
 
+    model = KinematicPINN.from_checkpoint(ckpt)
+    t_min = ckpt['t_min']
+    t_scale = ckpt['t_scale']
+    L_star = ckpt.get('L_star', 6378137.0)
+
     print(f"Normalization: t_min={t_min:.1f}, t_scale={t_scale:.1f}, L_star={L_star:.0f}")
-    model.eval()
 
     # ── Evaluate smoothing quality on full dataset ──────────────────────────
     print(f"\n{'-'*70}")
@@ -103,10 +100,10 @@ def main():
     print(f"{'-'*70}")
 
     with torch.no_grad():
-        t_norm = (t - t_min) / t_scale
-        r_pred_nd = model(t_norm.float())
+        t_norm = (t.double() - float(t_min)) / float(t_scale)   # float64: avoid phase floor
+        r_pred_nd = model(t_norm)
 
-    r_pred_km = r_pred_nd * L_star / 1000.0
+    r_pred_km = (r_pred_nd * L_star / 1000.0).float()
 
     diff_km = r_pred_km - r
     diff_m = diff_km * 1000.0
@@ -150,10 +147,10 @@ def main():
         # Evaluate on the masked gap
         t_gap = t[gap_mask]
         with torch.no_grad():
-            t_gap_norm = (t_gap - t_min) / t_scale
-            r_gap_pred_nd = model_gap(t_gap_norm.float())
+            t_gap_norm = (t_gap.double() - float(t_min)) / float(t_scale)
+            r_gap_pred_nd = model_gap(t_gap_norm)
 
-        r_gap_pred_km = r_gap_pred_nd * L_star / 1000.0
+        r_gap_pred_km = (r_gap_pred_nd * L_star / 1000.0).float()
 
         # Compare against ODCP truth
         t_tru = odcp[:, 0].numpy()

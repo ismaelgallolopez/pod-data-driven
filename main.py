@@ -70,11 +70,12 @@ def main():
     print(f"Training on all samples (full dataset for smoother)")
 
     # 3. Initialize and Train the PINN (Stage 1)
+    #    train_pinn writes the full checkpoint (weights + t_min/t_scale/rot_omega
+    #    /freqs) to data/processed/{pinn_smoother.pth, pinn_best.pth}; do NOT
+    #    overwrite it here with a bare state_dict (that drops the normalization
+    #    metadata the evaluator needs).
     print("Stage 1: PINN kinematic smoothing (full dataset)")
-    pinn_model = train_pinn(t, r, epochs=2000)
-
-    # 4. Save the smoothed model
-    torch.save(pinn_model.state_dict(), 'data/processed/pinn_smoother.pth')
+    train_pinn(t, r)
     print("\n>>> PINN Training Complete. Model saved.")
 
 if __name__ == "__main__":

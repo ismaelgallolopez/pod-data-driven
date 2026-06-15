@@ -11,7 +11,7 @@ sys.path.insert(0, str(repo_root))
 
 import torch
 import numpy as np
-from scipy.interpolate import interp1d
+from scipy.interpolate import CubicSpline
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import warnings
@@ -107,22 +107,24 @@ def main():
 
     r_pred_km = (r_pred_nd * L_star / 1000.0).float()
 
-    # Interpolate ODCP truth
+    # Interpolate ODCP truth with a CUBIC spline. The SPP epochs are offset from
+    # the truth's 10 s grid, so linear interpolation of the curved LEO orbit
+    # injects up to ~40 m (~20 m RMS on offset points) of spurious evaluation
+    # error — enough to inflate the headline (33 m linear -> ~27 m cubic) with no
+    # change to the model.
     t_np = t.numpy()
     t_tru = odcp[:, 0].numpy()
     r_tru_km = odcp[:, 1:4].numpy()
 
+    order = np.argsort(t_tru)
+    t_tru, r_tru_km = t_tru[order], r_tru_km[order]
+    uniq = np.concatenate([[True], np.diff(t_tru) > 0])
+    t_tru, r_tru_km = t_tru[uniq], r_tru_km[uniq]
+
     mask_overlap = (t_np >= t_tru[0]) & (t_np <= t_tru[-1])
 
-    interp_x = interp1d(t_tru, r_tru_km[:, 0], kind='linear')
-    interp_y = interp1d(t_tru, r_tru_km[:, 1], kind='linear')
-    interp_z = interp1d(t_tru, r_tru_km[:, 2], kind='linear')
-
-    r_tru_interp = np.column_stack([
-        interp_x(t_np[mask_overlap]),
-        interp_y(t_np[mask_overlap]),
-        interp_z(t_np[mask_overlap]),
-    ])
+    truth_spline = CubicSpline(t_tru, r_tru_km, axis=0)
+    r_tru_interp = truth_spline(t_np[mask_overlap])
 
     r_pred_overlap = r_pred_km[mask_overlap].numpy()
     r_spp_overlap = r[mask_overlap].numpy()
@@ -295,11 +297,7 @@ def main():
     r_plot_pred = r_pred_km[plot_mask].numpy()
 
     # Interpolate truth for plot
-    r_plot_truth = np.column_stack([
-        interp_x(t_np[plot_mask]),
-        interp_y(t_np[plot_mask]),
-        interp_z(t_np[plot_mask]),
-    ])
+    r_plot_truth = truth_spline(t_np[plot_mask])
 
     fig, axes = plt.subplots(3, 1, figsize=(14, 9), sharex=True)
     gap_start_h = gap_start_s / 3600.0
@@ -335,11 +333,7 @@ def main():
     r_plot_spp = r[plot_mask].numpy()
     r_plot_pred = r_pred_km[plot_mask].numpy()
 
-    r_plot_truth = np.column_stack([
-        interp_x(t_np[plot_mask]),
-        interp_y(t_np[plot_mask]),
-        interp_z(t_np[plot_mask]),
-    ])
+    r_plot_truth = truth_spline(t_np[plot_mask])
 
     fig, axes = plt.subplots(3, 1, figsize=(14, 9), sharex=True)
     gap_start_h = gap_start_s / 3600.0

@@ -203,13 +203,67 @@ def _robust_weights(Xall, r, ridge, L_star, extra_AtA=None, extra_Atb=None,
     return W, w
 
 
+# ── timetag recovery ─────────────────────────────────────────────────────────
+
+def _ecef_resid_m(basis, W1, t, r_ecef, t_min, t_scale, L_star, shift=0.0,
+                  chunk=15000):
+    """Per-epoch ECEF residual (metres) of the inertial stage-1 fit W1, evaluated
+    at the shifted times t+shift and rotated back to ECEF where the data lives."""
+    out = np.empty(len(t))
+    for i in range(0, len(t), chunk):
+        sl = slice(i, i + chunk)
+        tt = t[sl] + shift
+        inert = basis.design((tt - t_min) / t_scale) @ W1        # inertial nd
+        th = OMEGA_EARTH * (tt - t_min)
+        c, s = np.cos(th), np.sin(th)
+        ecef = np.column_stack([c * inert[:, 0] + s * inert[:, 1],
+                                -s * inert[:, 0] + c * inert[:, 1],
+                                inert[:, 2]])
+        out[sl] = np.linalg.norm((r_ecef[sl] - ecef) * L_star, axis=1)
+    return out
+
+
+def _recover_timetags(basis, W1, t, t01, r_ecef, r, X1, t_min, t_scale, L_star,
+                      candidates=(1.0,), tol_m=200.0):
+    """Relabel epochs whose position matches the stage-1 fit at a shifted time.
+
+    The SPP product carries a ~25% population tagged a whole second early — a
+    discrete +1.000 s timetag error, i.e. ~7.7 km of along-track motion. These
+    are NOT gross outliers: shifting their tag by +1 s collapses the residual
+    from ~7.7 km to ~2 m. We detect them against the (robust) stage-1 fit in
+    ECEF — where the observation lives, before the inertial rotation that itself
+    depends on the tag — relabel `t += shift`, and recompute their inertial
+    position and stage-1 design row so the refit keeps them instead of trimming
+    them (which is what leaves the gaps the rich stage-2 basis rings in).
+
+    Returns updated (t, t01, r, X1, n_fixed). A correctly-tagged epoch is never
+    moved: shifting a good point by a second puts it ~7.7 km off the fit, so the
+    no-shift residual always wins and best_shift stays 0.
+    """
+    base = _ecef_resid_m(basis, W1, t, r_ecef, t_min, t_scale, L_star, 0.0)
+    best_res, best_d = base.copy(), np.zeros(len(t))
+    for d in candidates:
+        res = _ecef_resid_m(basis, W1, t, r_ecef, t_min, t_scale, L_star, d)
+        take = res < best_res
+        best_res[take], best_d[take] = res[take], d
+    idx = np.where((best_res < tol_m) & (best_d != 0.0))[0]
+    if len(idx):
+        t = t.copy();     t[idx] += best_d[idx]
+        t01 = t01.copy(); t01[idx] = (t[idx] - t_min) / t_scale
+        r = r.copy();     r[idx] = rotate_z(t[idx], r_ecef[idx], +OMEGA_EARTH, t_min)
+        X1 = X1.copy();   X1[idx] = basis.design(t01[idx])
+    return t, t01, r, X1, len(idx)
+
+
 # ── trainer ────────────────────────────────────────────────────────────────
 
 def train_pinn(t_train, r_train, epochs=None, batch_size=None, resume=False,
                checkpoint_dir='data/processed', save_freq=None,
                pde_weight=None, data_only_epochs=None,
                n_poly=5, n_colloc=30000, phys_lam=1.0, n_gn_iters=2,
-               prior_alpha=0.1, n_prior_colloc=60000, chunk=15000, verbose=True):
+               prior_alpha=0.1, n_prior_colloc=60000, chunk=15000,
+               recover_timetags=True, timetag_candidates=(1.0,),
+               timetag_tol_m=200.0, verbose=True):
     """
     Fit the two-stage robust physics-regularized spectral smoother.
 
@@ -251,6 +305,28 @@ def train_pinn(t_train, r_train, epochs=None, batch_size=None, resume=False,
 
     W1, w = _robust_weights(X1, r, ridge, L_star)
     log(f"stage1 robust: kept {w.mean()*100:.1f}%")
+
+    # recover the ~25% +1.000 s timetag-shifted epochs (else they are trimmed as
+    # outliers, throwing away ~33% of usable data and leaving the gaps stage 2
+    # rings in). Relabel against the robust stage-1 fit, then refit on the
+    # augmented good set.
+    n_timetag_fixed = 0
+    lts_keep = 0.70          # right for the raw ~75% good / ~25% gross-outlier mix
+    if recover_timetags:
+        t, t01, r, X1, n_timetag_fixed = _recover_timetags(
+            b1, W1, t, t01, r_ecef, r, X1, t_min, t_scale, L_star,
+            candidates=tuple(timetag_candidates), tol_m=timetag_tol_m)
+        if n_timetag_fixed:
+            # the data is now ~98% good, so the 0.70 hard-trim would discard ~28%
+            # of GOOD points — preferentially the higher-residual arc-edge epochs,
+            # starving the boundary until the non-periodic basis rings to km level.
+            # Keep almost everything; the 6-sigma redescending pass still rejects
+            # the few genuine outliers that remain. Reused for stage 2.
+            lts_keep = min(0.97, w.mean() + n_timetag_fixed / len(t) - 0.02)
+            W1, w = _robust_weights(X1, r, ridge, L_star, lts_keep=lts_keep)
+        log(f"timetag recovery: relabeled {n_timetag_fixed} epochs "
+            f"({100.0*n_timetag_fixed/len(t):.1f}%); kept {w.mean()*100:.1f}% "
+            f"(lts_keep={lts_keep:.2f})")
 
     # physics GN (fixed robust weights) — tames edge ringing
     Xw = X1 * w[:, None]
@@ -325,7 +401,7 @@ def train_pinn(t_train, r_train, epochs=None, batch_size=None, resume=False,
         extra_Atb = alpha * (Xc.T @ prior_in)
         del Xc
 
-        W2, w2 = _robust_weights(X2, r, ridge, L_star,
+        W2, w2 = _robust_weights(X2, r, ridge, L_star, lts_keep=lts_keep,
                                  extra_AtA=extra_AtA, extra_Atb=extra_Atb)
         log(f"stage2 robust+prior (alpha={prior_alpha:g}): kept {w2.mean()*100:.1f}%")
         freqs_final, W_final, n_poly_final = b2.freqs, W2, n_poly
@@ -345,6 +421,7 @@ def train_pinn(t_train, r_train, epochs=None, batch_size=None, resume=False,
         'L_star': L_star, 'T_star': T_star, 'n_poly': n_poly_final,
         'rot_omega': float(rot_omega), 'phys_lambda': float(phys_lam),
         'prior_alpha': float(prior_alpha), 'robust_kept': float(w.mean()),
+        'n_timetag_fixed': int(n_timetag_fixed),
     }
     for name in ('pinn_smoother.pth', 'pinn_best.pth'):
         torch.save(ckpt, os.path.join(checkpoint_dir, name))

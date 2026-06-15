@@ -56,6 +56,9 @@ desktop.ini
 *.key
 *.crt
 
+# Scratch tuning outputs (tune_edge.py / gap experiments write here)
+data/processed/_tune/
+
 # Misc
 *.egg
 .eggs/

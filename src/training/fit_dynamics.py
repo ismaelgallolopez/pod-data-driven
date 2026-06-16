@@ -70,11 +70,12 @@ def accel(r, v, t, params):
     Returns (3,) non-dim acceleration [L_star / T_star^2].
     """
     phys = params.get('phys', _PHYS)
+    n_zonal = params.get('n_zonal', 2)
 
-    # --- two-body + J2 (the only force implemented) -------------------------
-    # OrbitPhysics.get_j2_acceleration expects (N,3) and returns (N,3); it already
-    # carries the corrected +1.5*J2/r^5 sign and the non-dim mu=1 convention.
-    a = phys.get_j2_acceleration(r.reshape(1, 3)).reshape(3)
+    # --- two-body + zonal gravity J2..J_{n_zonal} --------------------------
+    # get_zonal_acceleration expects (N,3) and returns (N,3); n_zonal=2 is exactly
+    # get_j2_acceleration (gate-verified) so the default reproduces J2-only.
+    a = phys.get_zonal_acceleration(r.reshape(1, 3), n_max=n_zonal).reshape(3)
 
     # --- TODO hook: atmospheric drag ---------------------------------------
     # a_drag = -0.5 * params['BC'] * rho(r) * |v_rel| * v_rel  (needs v, density
@@ -137,12 +138,13 @@ def _iqr_mask(r_km):
 
 
 def _accel_np(r_nd, params):
-    """numpy mirror of accel(): non-dim J2 acceleration via the SAME torch
-    get_j2_acceleration (so the fit and the torchdiffeq propagator share one
-    force). r_nd: (3,) -> (3,)."""
+    """numpy mirror of accel(): non-dim zonal acceleration via the SAME torch
+    get_zonal_acceleration with params['n_zonal'] (so the scipy fitter and the
+    torchdiffeq propagator share one force). r_nd: (3,) -> (3,)."""
     phys = params.get('phys', _PHYS)
+    n_zonal = params.get('n_zonal', 2)
     r = torch.from_numpy(np.ascontiguousarray(r_nd)).reshape(1, 3)
-    return phys.get_j2_acceleration(r).reshape(3).numpy()
+    return phys.get_zonal_acceleration(r, n_max=n_zonal).reshape(3).numpy()
 
 
 def _integrate_np(z0, t_nd, params, rtol=1e-9, atol=1e-9):
@@ -186,11 +188,13 @@ def propagate_ecef(model, t_seconds, t_ref, T_star, L_star, omega=OMEGA_EARTH):
 
 def fit_dynamics(t_seconds, r_km, t_ref_seconds=None, max_nfev=200,
                  huber_delta_m=5.0, init_window_s=300.0, init_poly_deg=2,
-                 params=None, rtol=1e-9, atol=1e-9, verbose=True):
-    """Fit z0 = [r0, v0] of a J2-propagated arc to the SPP positions.
+                 n_zonal=2, params=None, rtol=1e-9, atol=1e-9, verbose=True):
+    """Fit z0 = [r0, v0] of a zonal-gravity-propagated arc to the SPP positions.
 
     t_seconds : (N,) epochs (s).  r_km : (N,3) ECEF positions (km).
     t_ref_seconds : reference epoch (default: arc start).
+    n_zonal : max zonal degree in the force model (DEFAULT 2 = J2-only, exactly
+              the previous behaviour; 6 adds J3..J6).
     huber_delta_m : soft-L1 robustness scale (the ~few-metre SPP noise knee).
 
     z0 is found by robust Gauss-Newton (scipy.least_squares, soft-L1) over the 6
@@ -208,6 +212,7 @@ def fit_dynamics(t_seconds, r_km, t_ref_seconds=None, max_nfev=200,
     L_star, T_star = _PHYS.L_star, _PHYS.T_star
     if params is None:
         params = {'phys': _PHYS}
+    params = {**params, 'n_zonal': n_zonal}                # force-model order
 
     t = np.asarray(t_seconds, dtype=np.float64).ravel()
     r_ecef_km = np.asarray(r_km, dtype=np.float64).reshape(-1, 3)
